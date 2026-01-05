@@ -9,6 +9,7 @@ import SubmissionPage from './pages/SubmissionPage';
 import SerialHistoryPage from './pages/SerialHistoryPage';
 import DocHistoryPage from './pages/DocHistoryPage';
 
+
 function App() {
   return (
     <AppProvider>

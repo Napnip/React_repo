@@ -2,9 +2,9 @@ export const calculateANP = (premiumPaid, modeOfPayment) => {
     const val = parseFloat(premiumPaid) || 0;
     let anp = 0;
 
-    if (modeOfPayment === 'Monthly') anp = val * 12;
-    else if (modeOfPayment === 'Quarterly') anp = val * 4;
-    else if (modeOfPayment === 'Semi-Annual') anp = val * 2;
+    if (modeOfPayment === 'Monthly') anp = val / 12;
+    else if (modeOfPayment === 'Quarterly') anp = val / 4;
+    else if (modeOfPayment === 'Semi-Annual') anp = val / 2;
     else anp = val;
 
     return anp.toFixed(2);
