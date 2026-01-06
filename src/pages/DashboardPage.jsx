@@ -7,6 +7,8 @@ ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarEleme
 
 const DashboardPage = () => {
     const { monitoringData, loadMonitoringData } = useApp();
+    
+    // Existing Stats State
     const [stats, setStats] = useState({
         totalANP: 0,
         monthlyANP: 0,
@@ -16,6 +18,10 @@ const DashboardPage = () => {
         declined: 0
     });
 
+    // Historical ANP State
+    const [monthlyHistory, setMonthlyHistory] = useState({});
+    const [selectedMonthKey, setSelectedMonthKey] = useState('');
+
     useEffect(() => {
         loadMonitoringData();
     }, []);
@@ -24,18 +30,31 @@ const DashboardPage = () => {
         if (monitoringData.length > 0) {
             let totalANP = 0, monthlyANP = 0;
             let submitted = monitoringData.length, issued = 0, declined = 0, pending = 0;
+            
+            // For Historical Data Aggregation
+            const historyAgg = {};
 
             const now = new Date();
             const currentMonth = now.getMonth();
             const currentYear = now.getFullYear();
 
             monitoringData.forEach(item => {
+                // 1. Calculate Core Stats
                 if (item.status === 'Issued') {
-                    totalANP += parseFloat(item.anp) || 0;
+                    const anpVal = parseFloat(item.anp) || 0;
+                    totalANP += anpVal;
                     issued++;
+                    
                     const dDate = new Date(item.created_at);
-                    if (dDate.getMonth() === currentMonth && dDate.getFullYear() === currentYear) {
-                        monthlyANP += parseFloat(item.anp) || 0;
+                    if (!isNaN(dDate)) {
+                        // Current Month Check
+                        if (dDate.getMonth() === currentMonth && dDate.getFullYear() === currentYear) {
+                            monthlyANP += anpVal;
+                        }
+
+                        // Aggregate for Historical Dropdown
+                        const monthKey = `${dDate.getFullYear()}-${String(dDate.getMonth() + 1).padStart(2, '0')}`;
+                        historyAgg[monthKey] = (historyAgg[monthKey] || 0) + anpVal;
                     }
                 } else if (item.status === 'Declined') {
                     declined++;
@@ -45,8 +64,17 @@ const DashboardPage = () => {
             });
 
             setStats({ totalANP, monthlyANP, submitted, issued, pending, declined });
+            setMonthlyHistory(historyAgg);
+            
+            // Default to the most recent month WITH data
+            const availableKeys = Object.keys(historyAgg).sort().reverse();
+            if (availableKeys.length > 0) {
+                if (!selectedMonthKey || !historyAgg[selectedMonthKey]) {
+                    setSelectedMonthKey(availableKeys[0]);
+                }
+            }
         }
-    }, [monitoringData]);
+    }, [monitoringData, selectedMonthKey]);
 
     const statusData = {
         labels: ['Issued', 'Pending', 'Declined'],
@@ -70,6 +98,17 @@ const DashboardPage = () => {
         }]
     };
 
+    // Helper to format "YYYY-MM" to "Month YYYY"
+    const formatMonthKey = (key) => {
+        if (!key) return '';
+        const [year, month] = key.split('-');
+        const date = new Date(parseInt(year), parseInt(month) - 1, 1);
+        return date.toLocaleString('default', { month: 'long', year: 'numeric' });
+    };
+
+    const sortedMonthKeys = Object.keys(monthlyHistory).sort().reverse();
+    const selectedMonthANP = monthlyHistory[selectedMonthKey] || 0;
+
     return (
         <>
             <div className="card">
@@ -85,6 +124,7 @@ const DashboardPage = () => {
                             <div className="stat-value">PHP {stats.totalANP.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
                             <div className="stat-subtext">All-time annual premium</div>
                         </div>
+                        
                         <div className="stat-card green">
                             <div className="stat-header">
                                 <div className="stat-label">Monthly ANP</div>
@@ -92,6 +132,44 @@ const DashboardPage = () => {
                             <div className="stat-value">PHP {stats.monthlyANP.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
                             <div className="stat-subtext">This Month</div>
                         </div>
+
+                        {/* --- FIXED: Historical ANP Card (Standard Design) --- */}
+                        <div className="stat-card purple">
+                            <div className="stat-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div className="stat-label">Historical ANP</div>
+                                <select 
+                                    value={selectedMonthKey}
+                                    onChange={(e) => setSelectedMonthKey(e.target.value)}
+                                    style={{ 
+                                        padding: '2px 6px', 
+                                        fontSize: '11px', 
+                                        borderRadius: '4px',
+                                        border: '1px solid rgba(0,0,0,0.1)',
+                                        backgroundColor: 'rgba(255,255,255,0.2)', // Subtle background
+                                        cursor: 'pointer',
+                                        color: 'inherit',
+                                        outline: 'none'
+                                    }}
+                                >
+                                    {sortedMonthKeys.length > 0 ? (
+                                        sortedMonthKeys.map(key => (
+                                            <option key={key} value={key} style={{ color: '#333' }}>
+                                                {formatMonthKey(key)}
+                                            </option>
+                                        ))
+                                    ) : (
+                                        <option value="" style={{ color: '#333' }}>No Data</option>
+                                    )}
+                                </select>
+                            </div>
+                            <div className="stat-value">
+                                PHP {selectedMonthANP.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                            </div>
+                            <div className="stat-subtext">
+                                {selectedMonthKey ? formatMonthKey(selectedMonthKey) : 'Select Month'}
+                            </div>
+                        </div>
+
                         <div className="stat-card orange">
                             <div className="stat-header">
                                 <div className="stat-label">Submitted</div>
