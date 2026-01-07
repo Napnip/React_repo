@@ -428,7 +428,7 @@ const SubmissionPage = () => {
                         type="button" 
                         onClick={handlePreview} 
                         disabled={loading || !formData.formType}
-                        style={{ padding: '10px 20px', background: '#fd7e14', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                        style={{ padding: '10px 20px', background: '#007bff', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
                     >
                         Preview Summary
                     </button>
