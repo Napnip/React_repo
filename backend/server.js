@@ -6,6 +6,7 @@ const PDFDocument = require('pdfkit');
 const nodemailer = require('nodemailer');
 require('dotenv').config();
 
+// Bypass SSL verification for development
 if (process.env.NODE_ENV === 'development') {
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 }
@@ -17,6 +18,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Upload Config
 const storage = multer.memoryStorage();
 const upload = multer({
   storage: storage,
@@ -122,7 +124,7 @@ app.get('/api/serial-numbers/available/:policyType', async (req, res) => {
   }
 });
 
-// 2. SUBMIT MONITORING (SMART LOOKUP FIX)
+// 2. SUBMIT MONITORING (SMART LOOKUP)
 app.post('/api/monitoring/submit', async (req, res) => {
   try {
     const body = req.body;
@@ -150,7 +152,6 @@ app.post('/api/monitoring/submit', async (req, res) => {
                 console.log(`Fuzzy match found: '${match.policy_type}'`);
                 finalPolicyId = match.policy_id;
             } else {
-                // Log what IS in the database so you can see the issue
                 console.error("--- DEBUG: AVAILABLE POLICIES IN DB ---");
                 allPolicies.forEach(p => console.error(`ID: ${p.policy_id}, Type: '${p.policy_type}'`));
                 console.error("---------------------------------------");
@@ -159,7 +160,7 @@ app.post('/api/monitoring/submit', async (req, res) => {
     }
 
     if (!finalPolicyId) {
-        throw new Error(`Policy Type '${body.policyType}' not found in DB. Check server console for available types.`);
+        throw new Error(`Policy Type '${body.policyType}' not found in DB. Check server console.`);
     }
 
     // B. User
