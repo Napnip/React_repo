@@ -56,12 +56,15 @@ const SubmissionPage = () => {
             
             if (response.success) {
                 const data = response.data;
+                
+                // CORRECTED MAPPING: Uses CamelCase from the new endpoint
                 setFormData(prev => ({
                     ...prev,
-                    policyType: data.policy_type || '',
-                    modeOfPayment: data.mode_of_payment || '',
-                    policyDate: data.policy_date || ''
+                    policyType: data.policyType || '',       
+                    modeOfPayment: data.modeOfPayment || '', 
+                    policyDate: data.policyDate || ''        
                 }));
+                
                 setMessage('Serial found! Details auto-filled.');
                 setMessageType('success');
             } else {
@@ -343,21 +346,15 @@ const SubmissionPage = () => {
                                                             📄 {file.name} <small style={{color: '#888'}}>({(file.size / 1024).toFixed(0)} KB)</small>
                                                         </span>
                                                         
-                                                        {/* --- PERFECT SQUARE BUTTON --- */}
                                                         <button 
                                                             onClick={() => handleRemoveFile(req.id, idx)}
                                                             style={{
-                                                                // Force Square Dimensions
-                                                                width: '1px',       
+                                                                width: '25px',       
                                                                 height: '25px',
                                                                 minWidth: '25px',
-                                                                
-                                                                // Center Content
                                                                 display: 'flex',
                                                                 alignItems: 'center',
                                                                 justifyContent: 'center',
-                                                                
-                                                                // Reset Default Button Styles
                                                                 padding: 0,
                                                                 margin: '0 0 0 10px',
                                                                 border: 'none',

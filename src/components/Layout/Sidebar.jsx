@@ -42,8 +42,8 @@ const Sidebar = () => {
             )
         },
         {
-            path: '/serial-history', label: 'Serial Request History', icon: (
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+           path: '/serial-history', label: 'Serial Request History', icon: (
+               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                 </svg>
             )
