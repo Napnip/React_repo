@@ -131,24 +131,46 @@ function generateApplicationPDF(data, serialNumber) {
 
 app.get('/api/health', (req, res) => res.status(200).json({ status: 'ok' }));
 
-// 1. CHECK SERIAL
+// 1. CHECK SERIAL (System Only)
 app.get('/api/serial-numbers/available/:policyType', async (req, res) => {
   try {
     const { policyType } = req.params;
     const typeToSearch = policyType === 'Allianz Well' ? 'Allianz Well' : 'Default';
-    const { data, error } = await supabase.from('serial_number').select('*').eq('serial_type', typeToSearch).or('is_issued.is.null,is_issued.eq.false').limit(1).single();
-    if (error && error.code !== 'PGRST116') throw error;
-    if (!data) return res.status(404).json({ success: false, message: `No available serials` });
+    
+    // Safety check: Use limit(1) to avoid crashes on duplicates
+    const { data, error } = await supabase.from('serial_number')
+        .select('*')
+        .eq('serial_type', typeToSearch)
+        .or('is_issued.is.null,is_issued.eq.false')
+        .limit(1)
+        .maybeSingle(); 
+    
+    if (error) {
+        console.error("DB Check Error:", error);
+        return res.status(500).json({ success: false, message: "DB Error" });
+    }
+    
+    if (!data) return res.status(404).json({ success: false, message: `No available serials for ${policyType}` });
+
     res.json({ success: true, requiresSerial: true, serialNumber: data.serial_number.toString() });
-  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+  } catch (e) { 
+      console.error(e);
+      res.status(500).json({ success: false, message: e.message }); 
+  }
 });
 
-// 2. SUBMIT MONITORING
+// 2. SUBMIT MONITORING (ROBUST SYSTEM LOOKUP)
 app.post('/api/monitoring/submit', async (req, res) => {
   try {
     const body = req.body;
+    console.log(`Submitting: ${body.policyType} | Serial: ${body.serialNumber}`);
+
+    const MANUAL_POLICIES = ['Eazy Health', 'Allianz Fundamental Cover', 'Allianz Secure Pro'];
+    const isManual = MANUAL_POLICIES.includes(body.policyType);
+
+    // --- POLICY LOOKUP ---
     let finalPolicyId = null;
-    const { data: exactMatch } = await supabase.from('policy').select('policy_id').eq('policy_type', body.policyType).single();
+    const { data: exactMatch } = await supabase.from('policy').select('policy_id').eq('policy_type', body.policyType).maybeSingle();
     if (exactMatch) finalPolicyId = exactMatch.policy_id;
     else {
         const { data: all } = await supabase.from('policy').select('policy_id, policy_type');
@@ -157,48 +179,104 @@ app.post('/api/monitoring/submit', async (req, res) => {
     }
     if (!finalPolicyId) throw new Error(`Policy Type '${body.policyType}' not found.`);
 
+    // --- USER LOOKUP ---
     let userId = null;
-    const { data: userData } = await supabase.from('users').select('user_id').eq('user_email', body.intermediaryEmail).single();
+    const { data: userData } = await supabase.from('users').select('user_id').eq('user_email', body.intermediaryEmail).maybeSingle();
     if (userData) userId = userData.user_id;
     else {
       const { data: ag } = await supabase.from('agency').select('agency_id').limit(1).single();
       const { data: nu } = await supabase.from('users').insert([{ first_name: body.intermediaryName, last_name: '', user_email: body.intermediaryEmail, contact_number: 0, agency_id: ag.agency_id, role_id: 1 }]).select('user_id').single();
       userId = nu.user_id;
     }
+
+    // --- SERIAL LOGIC (FIXED) ---
     let serialId = null;
-    if (body.serialNumber) {
-        const { data: sd } = await supabase.from('serial_number').select('serial_id').eq('serial_number', body.serialNumber).single();
-        if (sd) serialId = sd.serial_id;
+    if (isManual) {
+        // Manual: Check exists, if not create
+        const { data: existingSerial } = await supabase.from('serial_number').select('serial_id').eq('serial_number', body.serialNumber).limit(1).maybeSingle();
+        if (existingSerial) {
+            serialId = existingSerial.serial_id;
+            await supabase.from('serial_number').update({ is_issued: true }).eq('serial_id', serialId);
+        } else {
+            // FIX: Ensure insert creates required fields (like date if needed) and captures errors
+            const { data: newSerial, error: createError } = await supabase.from('serial_number')
+                .insert([{ 
+                    serial_number: body.serialNumber, 
+                    serial_type: 'Manual', 
+                    is_issued: true,
+                    date: new Date().toISOString() // Ensure date is present just in case
+                }])
+                .select('serial_id')
+                .single();
+            
+            if (createError) {
+                console.error("Manual Serial Creation Failed:", createError);
+                throw new Error("Failed to register manual serial number: " + createError.message);
+            }
+            serialId = newSerial.serial_id;
+        }
+    } else {
+        // System: Must exist. Using limit(1).maybeSingle() to prevent crash on duplicates
+        const { data: sysSerial } = await supabase.from('serial_number')
+            .select('serial_id')
+            .eq('serial_number', body.serialNumber)
+            .limit(1)
+            .maybeSingle();
+            
+        if (!sysSerial) throw new Error(`System Serial ${body.serialNumber} not found/valid in database.`);
+        serialId = sysSerial.serial_id;
     }
+
+    // --- INSERT SUBMISSION ---
+    // FIX: ParseFloat safety to avoid NaN crashes
+    const safePremium = parseFloat(body.premiumPaid) || 0;
+    const safeANP = parseFloat(body.anp) || 0;
+
     const { data, error } = await supabase.from('az_submissions').insert([{
-      user_id: userId, client_name: `${body.clientFirstName} ${body.clientLastName}`, client_email: body.clientEmail,
-      policy_id: finalPolicyId, premium_paid: parseFloat(body.premiumPaid), anp: parseFloat(body.anp),
-      payment_interval: JSON.stringify(body.modeOfPayment), mode_of_payment: body.modeOfPayment,
-      serial_id: serialId, issued_at: new Date().toISOString(), submission_type: body.submissionType,
-      status: 'Pending', next_payment_date: calculateNextPaymentDate(body.policyDate, body.modeOfPayment), attachments: [] 
+      user_id: userId, 
+      client_name: `${body.clientFirstName} ${body.clientLastName}`, 
+      client_email: body.clientEmail,
+      policy_id: finalPolicyId, 
+      premium_paid: safePremium, 
+      anp: safeANP,
+      payment_interval: JSON.stringify(body.modeOfPayment), 
+      mode_of_payment: body.modeOfPayment,
+      serial_id: serialId, 
+      issued_at: new Date().toISOString(), 
+      submission_type: body.submissionType,
+      status: 'Pending', 
+      next_payment_date: calculateNextPaymentDate(body.policyDate, body.modeOfPayment), 
+      attachments: [] 
     }]).select().single();
 
-    if (error) throw error;
-    if (body.serialNumber) await supabase.from('serial_number').update({ is_issued: true }).eq('serial_number', body.serialNumber);
+    if (error) {
+        console.error("Submission Insert Failed:", error);
+        throw error;
+    }
+
+    if (!isManual && body.serialNumber) await supabase.from('serial_number').update({ is_issued: true }).eq('serial_number', body.serialNumber);
     
     res.status(201).json({ success: true, data: { ...data, serial_number: body.serialNumber } });
-  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+  } catch (e) { 
+    console.error("SERVER ERROR:", e);
+    res.status(500).json({ success: false, message: e.message }); 
+  }
 });
 
 // 3. GET DETAILS
 app.get('/api/submissions/details/:serialNumber', async (req, res) => {
     try {
         const { serialNumber } = req.params;
-        const { data: sData } = await supabase.from('serial_number').select('serial_id').eq('serial_number', serialNumber).single();
+        const { data: sData } = await supabase.from('serial_number').select('serial_id').eq('serial_number', serialNumber).limit(1).maybeSingle();
         if (!sData) return res.status(404).json({ success: false, message: 'Serial not found' });
-        const { data: sub } = await supabase.from('az_submissions').select(`*, policy (policy_type), users (first_name, last_name)`).eq('serial_id', sData.serial_id).single();
+        const { data: sub } = await supabase.from('az_submissions').select(`*, policy (policy_type), users (first_name, last_name)`).eq('serial_id', sData.serial_id).limit(1).maybeSingle();
         if (!sub) return res.status(404).json({ success: false, message: 'Submission not found' });
         const nameParts = (sub.client_name || '').split(' ');
         res.json({ success: true, data: { clientFirstName: nameParts[0], clientLastName: nameParts.slice(1).join(' '), clientEmail: sub.client_email, policyType: sub.policy?.policy_type, modeOfPayment: sub.mode_of_payment, policyDate: sub.issued_at } });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
 
-// 4. PREVIEW APPLICATION (Does not save)
+// 4. PREVIEW APPLICATION
 app.post('/api/preview-application', async (req, res) => {
     try {
         const { formData, serialNumber } = req.body;
@@ -208,50 +286,43 @@ app.post('/api/preview-application', async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// 5. DOCUMENT SUBMISSION (FIXED: Using Memory Buffers)
+// 5. DOCUMENT SUBMISSION
 app.post('/api/form-submissions', upload.any(), async (req, res) => {
   try {
     const { serialNumber, formData } = req.body; 
     const parsedData = JSON.parse(formData || '{}');
 
     // Validation
-    const { data: serialData } = await supabase.from('serial_number').select('serial_id').eq('serial_number', serialNumber).single();
+    const { data: serialData } = await supabase.from('serial_number').select('serial_id').eq('serial_number', serialNumber).limit(1).maybeSingle();
     if (!serialData) return res.status(404).json({ message: 'Serial not found' });
-    const { data: existing } = await supabase.from('az_submissions').select('*').eq('serial_id', serialData.serial_id).single();
+    const { data: existing } = await supabase.from('az_submissions').select('*').eq('serial_id', serialData.serial_id).limit(1).maybeSingle();
     if (!existing) return res.status(404).json({ message: 'Submission not found' });
 
-    // Arrays to hold files
     const newFilesForDB = [];
     const emailAttachments = [];
 
-    // A. Handle User Files
+    // User Files
     if (req.files) {
       for (const f of req.files) {
         try {
-          // 1. Upload to Supabase (for Database record)
           const fileData = await uploadFileToSupabase(f, existing.sub_id);
           newFilesForDB.push(fileData);
-          
-          // 2. Add to Email (using Memory Buffer - No Download needed)
           emailAttachments.push({ filename: f.originalname, content: f.buffer });
         } catch (e) { console.error('Upload error', e); }
       }
     }
 
-    // B. Handle Generated PDF
+    // Generated PDF
     let generatedPdfUrl = null;
     const pdfBuffer = await generateApplicationPDF(parsedData, serialNumber);
     const pdfFilename = `Application_${serialNumber}.pdf`;
 
-    // 1. Upload PDF to Supabase
     const pdfUpload = await uploadBufferToSupabase(pdfBuffer, pdfFilename, existing.sub_id);
     newFilesForDB.push(pdfUpload);
     generatedPdfUrl = pdfUpload.fileUrl;
-
-    // 2. Add PDF to Email
     emailAttachments.push({ filename: pdfFilename, content: pdfBuffer });
 
-    // C. Update Database
+    // Update DB
     const { data: updated, error } = await supabase.from('az_submissions').update({
         form_type: parsedData.formType, mode_of_payment: parsedData.modeOfPayment,
         attachments: [...(existing.attachments || []), ...newFilesForDB]
@@ -259,15 +330,14 @@ app.post('/api/form-submissions', upload.any(), async (req, res) => {
 
     if (error) throw error;
     
-    // D. Send Email
+    // Email
     try {
-        console.log(`Sending Email with ${emailAttachments.length} attachments...`);
         await transporter.sendMail({
             from: process.env.EMAIL_USER,
             to: ALLIANZ_HO_EMAIL,
             subject: `Submission: ${serialNumber} - ${existing.client_name}`,
             text: `New Application Received.\n\nSerial: ${serialNumber}\nClient: ${existing.client_name}\n\nDocuments attached.`,
-            attachments: emailAttachments // Using in-memory files
+            attachments: emailAttachments
         });
         console.log("✅ Email Sent!");
     } catch(err) { console.error("❌ Email failed:", err); }
@@ -276,7 +346,7 @@ app.post('/api/form-submissions', upload.any(), async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ success: false, message: e.message }); }
 });
 
-// ... GET ALL, CUSTOMERS, ETC.
+// ... OTHERS
 app.get('/api/monitoring/all', async (req, res) => {
     const { data } = await supabase.from('az_submissions').select(`*, policy (policy_type), serial_number (serial_number), users (first_name, last_name)`).order('issued_at', {ascending:false});
     res.json({ success: true, data: (data||[]).map(i => ({ ...i, id: i.sub_id, policy_type: i.policy?.policy_type, serial_number: i.serial_number?.serial_number, intermediary_name: i.users?.first_name, created_at: i.issued_at })) });
@@ -295,7 +365,7 @@ app.patch('/api/form-submissions/:id/status', async (req, res) => {
 app.post('/api/submissions/:id/pay', async (req, res) => {
   try {
     const { id } = req.params;
-    const { data: policy } = await supabase.from('az_submissions').select('*').eq('sub_id', id).single();
+    const { data: policy } = await supabase.from('az_submissions').select('*').eq('sub_id', id).limit(1).maybeSingle();
     if (!policy) return res.status(404).json({ success: false, message: 'Not found' });
     const newDueDate = calculateNextPaymentDate(policy.next_payment_date, policy.mode_of_payment);
     await supabase.from('az_submissions').update({ next_payment_date: newDueDate }).eq('sub_id', id);
