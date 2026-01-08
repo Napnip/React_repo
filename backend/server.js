@@ -184,6 +184,7 @@ app.post('/api/monitoring/submit', async (req, res) => {
     const { data: userData } = await supabase.from('users').select('user_id').eq('user_email', body.intermediaryEmail).maybeSingle();
     if (userData) userId = userData.user_id;
     else {
+      // FIX: Use 'name' for Agency lookup if needed, though we use ID here
       const { data: ag } = await supabase.from('agency').select('agency_id').limit(1).single();
       const { data: nu } = await supabase.from('users').insert([{ first_name: body.intermediaryName, last_name: '', user_email: body.intermediaryEmail, contact_number: 0, agency_id: ag.agency_id, role_id: 1 }]).select('user_id').single();
       userId = nu.user_id;
@@ -346,17 +347,61 @@ app.post('/api/form-submissions', upload.any(), async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ success: false, message: e.message }); }
 });
 
-// ... OTHERS
+// --- UPDATED MONITORING ENDPOINTS ---
+
 app.get('/api/monitoring/all', async (req, res) => {
-    const { data } = await supabase.from('az_submissions').select(`*, policy (policy_type), serial_number (serial_number), users (first_name, last_name)`).order('issued_at', {ascending:false});
-    res.json({ success: true, data: (data||[]).map(i => ({ ...i, id: i.sub_id, policy_type: i.policy?.policy_type, serial_number: i.serial_number?.serial_number, intermediary_name: i.users?.first_name, created_at: i.issued_at })) });
+    // FIX: select(..., agency(name)) based on SCHEMA
+    const { data } = await supabase
+        .from('az_submissions')
+        .select(`*, policy (policy_type), serial_number (serial_number), users (first_name, last_name, agency(name))`)
+        .order('issued_at', {ascending:false});
+
+    const flattened = (data||[]).map(i => ({ 
+        ...i, 
+        id: i.sub_id, 
+        policy_type: i.policy?.policy_type, 
+        serial_number: i.serial_number?.serial_number, 
+        intermediary_name: i.users?.first_name,
+        agency: i.users?.agency?.name, // Use 'name' from Agency
+        created_at: i.issued_at 
+    }));
+    
+    res.json({ success: true, data: flattened });
 });
+
+// --- UPDATED CUSTOMERS ENDPOINT (FIXED BLANK DATA) ---
 app.get('/api/customers', async (req, res) => {
-    const { data } = await supabase.from('az_submissions').select('*');
+    // FIX: select(..., agency(name)) based on SCHEMA
+    const { data } = await supabase.from('az_submissions')
+        .select(`*, policy (policy_type), serial_number (serial_number), users (agency(name))`);
+
     const map = {};
-    (data||[]).forEach(s => { if(s.client_email) { if(!map[s.client_email]) map[s.client_email] = {id: s.sub_id, first_name: s.client_name.split(' ')[0], last_name: s.client_name.split(' ').slice(1).join(' '), email: s.client_email, submissions:[]}; map[s.client_email].submissions.push(s); }});
+    (data||[]).forEach(s => { 
+        if(s.client_email) { 
+            if(!map[s.client_email]) {
+                map[s.client_email] = {
+                    id: s.sub_id, 
+                    first_name: s.client_name.split(' ')[0], 
+                    last_name: s.client_name.split(' ').slice(1).join(' '), 
+                    email: s.client_email, 
+                    submissions:[]
+                }; 
+            }
+            
+            // FLATTEN THE DATA SO FRONTEND CAN READ IT EASILY
+            const flatSubmission = {
+                ...s,
+                policy_type: s.policy?.policy_type,
+                serial_number: s.serial_number?.serial_number,
+                agency: s.users?.agency?.name // Use 'name' from Agency
+            };
+
+            map[s.client_email].submissions.push(flatSubmission); 
+        }
+    });
     res.json({ success: true, data: Object.values(map) });
 });
+
 app.patch('/api/form-submissions/:id/status', async (req, res) => {
   const { id } = req.params; const { status } = req.body;
   await supabase.from('az_submissions').update({ status }).eq('sub_id', id);

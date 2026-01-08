@@ -317,14 +317,20 @@ const CustomersPage = () => {
                                     <div style={{fontWeight: 500}}>{selectedPolicy.policy_type}</div>
                                 </div>
                                 <div>
-                                    <small style={{color: '#666', fontWeight: 600}}>Premium</small>
-                                    <div style={{fontWeight: 500}}>PHP {parseFloat(selectedPolicy.premium_paid).toLocaleString()}</div>
-                                </div>
-
-                                <div>
                                     <small style={{color: '#666', fontWeight: 600}}>Mode of Payment</small>
                                     <div>{selectedPolicy.mode_of_payment}</div>
                                 </div>
+
+                                {/* MODIFIED: Added ANP next to Premium */}
+                                <div>
+                                    <small style={{color: '#666', fontWeight: 600}}>Premium Paid</small>
+                                    <div style={{fontWeight: 500}}>PHP {parseFloat(selectedPolicy.premium_paid || 0).toLocaleString()}</div>
+                                </div>
+                                <div>
+                                    <small style={{color: '#666', fontWeight: 600}}>Annualized Premium (ANP)</small>
+                                    <div style={{fontWeight: 500, color: '#28a745'}}>PHP {parseFloat(selectedPolicy.anp || 0).toLocaleString()}</div>
+                                </div>
+
                                 <div>
                                     <small style={{color: '#666', fontWeight: 600}}>Agency</small>
                                     <div>{selectedPolicy.agency || '-'}</div>
