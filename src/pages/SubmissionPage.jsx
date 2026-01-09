@@ -9,15 +9,18 @@ const SubmissionPage = () => {
         medical: { height: '', weight: '', diagnosed: 'No', hospitalized: 'No', smoker: 'No', alcohol: 'No' }
     });
 
+    // NEW: State for VUL GAE option
+    const [isGAE, setIsGAE] = useState(false); 
+
     const [specificFiles, setSpecificFiles] = useState({});
     
     // UI States
     const [loading, setLoading] = useState(false);
     const [message, setMessage] = useState('');
     const [messageType, setMessageType] = useState(''); 
-    const [generatedPdfUrl, setGeneratedPdfUrl] = useState(null); // For final download link
+    const [generatedPdfUrl, setGeneratedPdfUrl] = useState(null); 
     
-    // --- NEW: PREVIEW MODAL STATES ---
+    // --- PREVIEW MODAL STATES ---
     const [showPreview, setShowPreview] = useState(false);
     const [previewBlobUrl, setPreviewBlobUrl] = useState(null);
 
@@ -25,7 +28,7 @@ const SubmissionPage = () => {
     const REQUIREMENTS = {
         'VUL': [ 
             { id: 'app_form', label: 'Accomplished Application Form', required: true },
-            { id: 'auth_med', label: 'Authorization to Furnish Medical', required: true },
+            { id: 'auth_med', label: 'Authorization to Furnish Medical', required: true, nonGaeOnly: true }, // CHANGED: Added flag
             { id: 'inter_dec', label: 'Intermediary Declarations', required: true },
             { id: 'acr', label: "Agent's Confidential Report (ACR)", required: true },
             { id: 'specimen_sig', label: 'Client Specimen Signature Form OR Valid ID (Signed 3x)', required: true },
@@ -90,6 +93,9 @@ const SubmissionPage = () => {
                     formType: detectedCategory 
                 }));
                 
+                // Reset GAE to default (False / Non-GAE) when new serial loads
+                setIsGAE(false);
+
                 setMessage(`Serial found! Identified as ${detectedCategory} Application.`);
                 setMessageType('success');
             } else {
@@ -143,7 +149,6 @@ const SubmissionPage = () => {
         });
     };
 
-    // --- MODIFIED: PREVIEW IN MODAL ---
     const handlePreview = async () => {
         try {
             setLoading(true);
@@ -157,11 +162,8 @@ const SubmissionPage = () => {
             
             const blob = await response.blob();
             const url = window.URL.createObjectURL(blob);
-            
-            // Set URL and Open Modal
             setPreviewBlobUrl(url);
             setShowPreview(true);
-
         } catch (e) {
             alert('Could not generate preview.');
             console.error(e);
@@ -172,7 +174,18 @@ const SubmissionPage = () => {
 
     const closePreview = () => {
         setShowPreview(false);
-        // Optional: Revoke URL to free memory, but keeping it is fine for re-opening
+    };
+
+    // --- HELPER TO GET ACTIVE REQUIREMENTS ---
+    const getActiveRequirements = () => {
+        if (!formData.formType) return [];
+        let reqs = REQUIREMENTS[formData.formType] || [];
+        
+        // If VUL and GAE is selected, filter out "nonGaeOnly" items (like Medical Auth)
+        if (formData.formType === 'VUL' && isGAE) {
+            reqs = reqs.filter(r => !r.nonGaeOnly);
+        }
+        return reqs;
     };
 
     const handleSubmit = async () => {
@@ -181,7 +194,7 @@ const SubmissionPage = () => {
             return;
         }
 
-        const currentReqs = REQUIREMENTS[formData.formType] || [];
+        const currentReqs = getActiveRequirements();
         const missingFiles = currentReqs
             .filter(r => r.required && (!specificFiles[r.id] || specificFiles[r.id].length === 0))
             .map(r => r.label);
@@ -198,7 +211,7 @@ const SubmissionPage = () => {
 
             const dataPayload = new FormData();
             dataPayload.append('serialNumber', formData.serialNumber);
-            dataPayload.append('formData', JSON.stringify(formData));
+            dataPayload.append('formData', JSON.stringify({ ...formData, isGAE })); // Include GAE status
 
             Object.entries(specificFiles).forEach(([key, filesArray]) => {
                 filesArray.forEach(file => {
@@ -218,6 +231,7 @@ const SubmissionPage = () => {
                     modeOfPayment: '', policyDate: '', clientFirstName: '', clientLastName: '',
                     medical: { height: '', weight: '', diagnosed: 'No', hospitalized: 'No', smoker: 'No', alcohol: 'No' }
                 });
+                setIsGAE(false);
                 setSpecificFiles({});
             } else {
                 setMessage('Submission failed: ' + response.message);
@@ -231,6 +245,10 @@ const SubmissionPage = () => {
             setLoading(false);
         }
     };
+
+    // Helper: Determine if Medical Section should show
+    // Show if Form is NOT VUL, OR if it IS VUL but Non-GAE (isGAE === false)
+    const showMedicalSection = formData.formType && (formData.formType !== 'VUL' || !isGAE);
 
     return (
         <div className="card">
@@ -296,9 +314,30 @@ const SubmissionPage = () => {
                         <label>Client Name</label>
                         <input value={`${formData.clientFirstName} ${formData.clientLastName}`} readOnly style={{ backgroundColor: '#e9ecef' }} />
                     </div>
+
+                    {/* --- NEW: VUL GAE DROPDOWN --- */}
+                    {formData.formType === 'VUL' && (
+                         <div className="form-group">
+                            <label style={{ color: '#856404' }}>VUL Underwriting Option</label>
+                            <select 
+                                value={isGAE ? 'GAE' : 'Non-GAE'} 
+                                onChange={(e) => setIsGAE(e.target.value === 'GAE')}
+                                style={{ 
+                                    backgroundColor: '#fff3cd', 
+                                    borderColor: '#ffeeba', 
+                                    color: '#856404', 
+                                    fontWeight: 'bold' 
+                                }}
+                            >
+                                <option value="Non-GAE">Non-GAE (Standard - Medical Required)</option>
+                                <option value="GAE">GAE (Guaranteed Acceptance Offer)</option>
+                            </select>
+                        </div>
+                    )}
                 </div>
 
-                {formData.formType && (
+                {/* --- MEDICAL SECTION: Only show if NOT VUL-GAE --- */}
+                {showMedicalSection && (
                     <div className="medical-section" style={{ marginTop: '25px', backgroundColor: '#fff', padding: '15px', border: '1px solid #ddd', borderRadius: '8px' }}>
                         <h3 style={{ color: '#c0392b', borderBottom: '2px solid #eee', paddingBottom: '10px', marginTop: 0 }}>
                             Medical & Personal Declaration
@@ -349,14 +388,14 @@ const SubmissionPage = () => {
                 {formData.formType && (
                     <div className="file-upload-section">
                         <h3>
-                            Requirements for {formData.formType}
+                            Requirements for {formData.formType} {isGAE && '(GAE)'}
                             <span style={{ fontSize: '0.6em', color: '#666', marginLeft: '10px', fontWeight: 'normal' }}>
                                 (Based on {formData.policyType})
                             </span>
                         </h3>
                         
                         <div style={{ display: 'grid', gap: '15px' }}>
-                            {REQUIREMENTS[formData.formType].map((req) => {
+                            {getActiveRequirements().map((req) => {
                                 const uploadedFiles = specificFiles[req.id] || [];
                                 const hasFiles = uploadedFiles.length > 0;
 
