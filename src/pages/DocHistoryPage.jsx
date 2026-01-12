@@ -69,6 +69,12 @@ const DocHistoryPage = () => {
                         {currentItems.map(item => {
                             const statusClass = `status-${(item.status || 'pending').toLowerCase()}`;
                             
+                            // Helper to detect GAE/Non-GAE for better display
+                            const isVUL = item.form_type && item.form_type.includes('VUL');
+                            const gaeType = item.form_type && item.form_type.includes('GAE') 
+                                ? (item.form_type.includes('Non-GAE') ? '(Non-GAE)' : '(GAE)')
+                                : '';
+
                             return (
                                 <div key={item.id} className="submission-card" style={{ borderLeftColor: '#0055b8' }}>
                                     {/* Header: Name & Status */}
@@ -109,10 +115,21 @@ const DocHistoryPage = () => {
                                             <span style={{color:'#666', fontSize:'12px', display:'block'}}>Agency</span>
                                             <span>{item.agency}</span>
                                         </div>
+                                        
+                                        {/* MODIFIED: Improved Form Type Display */}
                                         <div>
                                             <span style={{color:'#666', fontSize:'12px', display:'block'}}>Form</span>
-                                            <span style={{fontWeight:500}}>{item.form_type}</span>
+                                            <span style={{fontWeight:500}}>
+                                                {isVUL && gaeType ? (
+                                                    <span>
+                                                        VUL <span style={{fontSize: '11px', color: '#555', fontWeight: 'normal'}}>{gaeType}</span>
+                                                    </span>
+                                                ) : (
+                                                    item.form_type
+                                                )}
+                                            </span>
                                         </div>
+
                                         <div>
                                             <span style={{color:'#666', fontSize:'12px', display:'block'}}>Mode</span>
                                             <span>{item.mode_of_payment}</span>

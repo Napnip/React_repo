@@ -315,23 +315,28 @@ const SubmissionPage = () => {
                         <input value={`${formData.clientFirstName} ${formData.clientLastName}`} readOnly style={{ backgroundColor: '#e9ecef' }} />
                     </div>
 
-                    {/* --- NEW: VUL GAE DROPDOWN --- */}
+                    {/* --- NEW: VUL GAE TOGGLE --- */}
                     {formData.formType === 'VUL' && (
-                         <div className="form-group">
-                            <label style={{ color: '#856404' }}>VUL Underwriting Option</label>
-                            <select 
-                                value={isGAE ? 'GAE' : 'Non-GAE'} 
-                                onChange={(e) => setIsGAE(e.target.value === 'GAE')}
-                                style={{ 
-                                    backgroundColor: '#fff3cd', 
-                                    borderColor: '#ffeeba', 
-                                    color: '#856404', 
-                                    fontWeight: 'bold' 
-                                }}
-                            >
-                                <option value="Non-GAE">Non-GAE (Standard - Medical Required)</option>
-                                <option value="GAE">GAE (Guaranteed Acceptance Offer)</option>
-                            </select>
+                         <div className="form-group" style={{ gridColumn: '1 / -1', backgroundColor: '#fff3cd', padding: '10px', borderRadius: '4px', border: '1px solid #ffeeba' }}>
+                            <label style={{ color: '#856404', marginBottom: '8px', display: 'block' }}>VUL Underwriting Option</label>
+                            <div style={{ display: 'flex', gap: '20px' }}>
+                                <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', fontWeight: !isGAE ? 'bold' : 'normal' }}>
+                                    <input 
+                                        type="radio" 
+                                        checked={!isGAE} 
+                                        onChange={() => setIsGAE(false)} 
+                                    />
+                                    Non-GAE (Standard - Medical Required)
+                                </label>
+                                <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', fontWeight: isGAE ? 'bold' : 'normal' }}>
+                                    <input 
+                                        type="radio" 
+                                        checked={isGAE} 
+                                        onChange={() => setIsGAE(true)} 
+                                    />
+                                    GAE (Guaranteed Acceptance Offer)
+                                </label>
+                            </div>
                         </div>
                     )}
                 </div>

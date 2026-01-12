@@ -35,10 +35,13 @@ const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsIn
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const transporter = nodemailer.createTransport({
+  pool: true, 
+  maxConnections: 1, 
   host: process.env.EMAIL_HOST,
   port: process.env.EMAIL_PORT,
-  secure: false,
-  auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASSWORD }
+  secure: false, 
+  auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASSWORD },
+  tls: { rejectUnauthorized: false }
 });
 
 const ALLIANZ_HO_EMAIL = process.env.ALLIANZ_HO_EMAIL;
@@ -52,8 +55,10 @@ transporter.verify((error) => {
 
 // --- HELPER FUNCTIONS ---
 function calculateNextPaymentDate(policyDate, mode) {
-  const date = new Date(policyDate);
+  const date = policyDate ? new Date(policyDate) : new Date();
+  
   if (isNaN(date.getTime())) return null;
+
   switch (mode) {
     case 'Monthly': date.setMonth(date.getMonth() + 1); break;
     case 'Quarterly': date.setMonth(date.getMonth() + 3); break;
@@ -106,9 +111,15 @@ function generateApplicationPDF(data, serialNumber) {
            .text(`Email: ${data.clientEmail || 'N/A'}`).moveDown();
 
         doc.fontSize(14).text('Policy Details', { underline: true }).moveDown(0.5);
+        
+        let displayFormType = data.formType;
+        if (data.formType === 'VUL') {
+            displayFormType = data.isGAE ? 'VUL (GAE)' : 'VUL (Non-GAE)';
+        }
+
         doc.fontSize(10)
            .text(`Policy Type: ${data.policyType}`)
-           .text(`Form Category: ${data.formType}`)
+           .text(`Form Category: ${displayFormType}`) 
            .text(`Mode of Payment: ${data.modeOfPayment}`)
            .text(`Policy Date: ${data.policyDate}`).moveDown();
 
@@ -137,7 +148,6 @@ app.get('/api/serial-numbers/available/:policyType', async (req, res) => {
     const { policyType } = req.params;
     const typeToSearch = policyType === 'Allianz Well' ? 'Allianz Well' : 'Default';
     
-    // Safety check: Use limit(1) to avoid crashes on duplicates
     const { data, error } = await supabase.from('serial_number')
         .select('*')
         .eq('serial_type', typeToSearch)
@@ -159,7 +169,7 @@ app.get('/api/serial-numbers/available/:policyType', async (req, res) => {
   }
 });
 
-// 2. SUBMIT MONITORING (ROBUST SYSTEM LOOKUP)
+// 2. SUBMIT MONITORING
 app.post('/api/monitoring/submit', async (req, res) => {
   try {
     const body = req.body;
@@ -184,40 +194,33 @@ app.post('/api/monitoring/submit', async (req, res) => {
     const { data: userData } = await supabase.from('users').select('user_id').eq('user_email', body.intermediaryEmail).maybeSingle();
     if (userData) userId = userData.user_id;
     else {
-      // FIX: Use 'name' for Agency lookup if needed, though we use ID here
       const { data: ag } = await supabase.from('agency').select('agency_id').limit(1).single();
       const { data: nu } = await supabase.from('users').insert([{ first_name: body.intermediaryName, last_name: '', user_email: body.intermediaryEmail, contact_number: 0, agency_id: ag.agency_id, role_id: 1 }]).select('user_id').single();
       userId = nu.user_id;
     }
 
-    // --- SERIAL LOGIC (FIXED) ---
+    // --- SERIAL LOGIC ---
     let serialId = null;
     if (isManual) {
-        // Manual: Check exists, if not create
         const { data: existingSerial } = await supabase.from('serial_number').select('serial_id').eq('serial_number', body.serialNumber).limit(1).maybeSingle();
         if (existingSerial) {
             serialId = existingSerial.serial_id;
             await supabase.from('serial_number').update({ is_issued: true }).eq('serial_id', serialId);
         } else {
-            // FIX: Ensure insert creates required fields (like date if needed) and captures errors
             const { data: newSerial, error: createError } = await supabase.from('serial_number')
                 .insert([{ 
                     serial_number: body.serialNumber, 
                     serial_type: 'Manual', 
                     is_issued: true,
-                    date: new Date().toISOString() // Ensure date is present just in case
+                    date: new Date().toISOString()
                 }])
                 .select('serial_id')
                 .single();
             
-            if (createError) {
-                console.error("Manual Serial Creation Failed:", createError);
-                throw new Error("Failed to register manual serial number: " + createError.message);
-            }
+            if (createError) throw new Error("Failed to register manual serial number: " + createError.message);
             serialId = newSerial.serial_id;
         }
     } else {
-        // System: Must exist. Using limit(1).maybeSingle() to prevent crash on duplicates
         const { data: sysSerial } = await supabase.from('serial_number')
             .select('serial_id')
             .eq('serial_number', body.serialNumber)
@@ -229,7 +232,6 @@ app.post('/api/monitoring/submit', async (req, res) => {
     }
 
     // --- INSERT SUBMISSION ---
-    // FIX: ParseFloat safety to avoid NaN crashes
     const safePremium = parseFloat(body.premiumPaid) || 0;
     const safeANP = parseFloat(body.anp) || 0;
 
@@ -247,7 +249,8 @@ app.post('/api/monitoring/submit', async (req, res) => {
       submission_type: body.submissionType,
       status: 'Pending', 
       next_payment_date: calculateNextPaymentDate(body.policyDate, body.modeOfPayment), 
-      attachments: [] 
+      attachments: [],
+      is_paid: false 
     }]).select().single();
 
     if (error) {
@@ -323,9 +326,15 @@ app.post('/api/form-submissions', upload.any(), async (req, res) => {
     generatedPdfUrl = pdfUpload.fileUrl;
     emailAttachments.push({ filename: pdfFilename, content: pdfBuffer });
 
+    let formTypeToSave = parsedData.formType;
+    if (parsedData.formType === 'VUL') {
+        formTypeToSave = parsedData.isGAE ? 'VUL (GAE)' : 'VUL (Non-GAE)';
+    }
+
     // Update DB
     const { data: updated, error } = await supabase.from('az_submissions').update({
-        form_type: parsedData.formType, mode_of_payment: parsedData.modeOfPayment,
+        form_type: formTypeToSave, 
+        mode_of_payment: parsedData.modeOfPayment,
         attachments: [...(existing.attachments || []), ...newFilesForDB]
     }).eq('sub_id', existing.sub_id).select().single();
 
@@ -347,10 +356,8 @@ app.post('/api/form-submissions', upload.any(), async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ success: false, message: e.message }); }
 });
 
-// --- UPDATED MONITORING ENDPOINTS ---
-
+// --- MONITORING ENDPOINTS ---
 app.get('/api/monitoring/all', async (req, res) => {
-    // FIX: select(..., agency(name)) based on SCHEMA
     const { data } = await supabase
         .from('az_submissions')
         .select(`*, policy (policy_type), serial_number (serial_number), users (first_name, last_name, agency(name))`)
@@ -362,18 +369,19 @@ app.get('/api/monitoring/all', async (req, res) => {
         policy_type: i.policy?.policy_type, 
         serial_number: i.serial_number?.serial_number, 
         intermediary_name: i.users?.first_name,
-        agency: i.users?.agency?.name, // Use 'name' from Agency
-        created_at: i.issued_at 
+        agency: i.users?.agency?.name, 
+        created_at: i.issued_at,
+        is_paid: i.is_paid 
     }));
     
     res.json({ success: true, data: flattened });
 });
 
-// --- UPDATED CUSTOMERS ENDPOINT (FIXED BLANK DATA) ---
+// --- CUSTOMERS ENDPOINT (Updated to Include Payment History) ---
 app.get('/api/customers', async (req, res) => {
-    // FIX: select(..., agency(name)) based on SCHEMA
+    // UPDATED: Now selecting 'payment_history(*)' to fetch history
     const { data } = await supabase.from('az_submissions')
-        .select(`*, policy (policy_type), serial_number (serial_number), users (agency(name))`);
+        .select(`*, policy (policy_type), serial_number (serial_number), users (agency(name)), payment_history(*)`);
 
     const map = {};
     (data||[]).forEach(s => { 
@@ -388,12 +396,14 @@ app.get('/api/customers', async (req, res) => {
                 }; 
             }
             
-            // FLATTEN THE DATA SO FRONTEND CAN READ IT EASILY
             const flatSubmission = {
                 ...s,
+                id: s.sub_id, 
                 policy_type: s.policy?.policy_type,
                 serial_number: s.serial_number?.serial_number,
-                agency: s.users?.agency?.name // Use 'name' from Agency
+                agency: s.users?.agency?.name,
+                is_paid: s.is_paid,
+                payment_history: s.payment_history || [] // Map the history to the frontend object
             };
 
             map[s.client_email].submissions.push(flatSubmission); 
@@ -402,20 +412,67 @@ app.get('/api/customers', async (req, res) => {
     res.json({ success: true, data: Object.values(map) });
 });
 
+// --- UPDATED STATUS ENDPOINT ---
 app.patch('/api/form-submissions/:id/status', async (req, res) => {
-  const { id } = req.params; const { status } = req.body;
-  await supabase.from('az_submissions').update({ status }).eq('sub_id', id);
-  res.json({ success: true });
+  try {
+      const { id } = req.params; 
+      const { status } = req.body;
+      
+      const updateData = { status };
+      
+      if (status === 'Issued') {
+          updateData.date_issued = new Date().toISOString();
+      }
+
+      const { error } = await supabase.from('az_submissions').update(updateData).eq('sub_id', id);
+      
+      if(error) throw error;
+      res.json({ success: true });
+  } catch(e) {
+      console.error(e);
+      res.status(500).json({ success: false, message: "Update failed" });
+  }
 });
+
+// --- PAYMENT ENDPOINT ---
 app.post('/api/submissions/:id/pay', async (req, res) => {
   try {
     const { id } = req.params;
+    console.log("Marking paid for ID:", id); 
+
     const { data: policy } = await supabase.from('az_submissions').select('*').eq('sub_id', id).limit(1).maybeSingle();
-    if (!policy) return res.status(404).json({ success: false, message: 'Not found' });
-    const newDueDate = calculateNextPaymentDate(policy.next_payment_date, policy.mode_of_payment);
-    await supabase.from('az_submissions').update({ next_payment_date: newDueDate }).eq('sub_id', id);
+    
+    if (!policy) {
+        console.error("Policy not found for ID:", id);
+        return res.status(404).json({ success: false, message: 'Not found' });
+    }
+
+    const currentDueDate = policy.next_payment_date || new Date();
+    const newDueDate = calculateNextPaymentDate(currentDueDate, policy.mode_of_payment);
+    
+    // Log to Payment History
+    try {
+        await supabase.from('payment_history').insert([{
+            sub_id: id,
+            amount: policy.premium_paid,
+            payment_date: new Date(),
+            period_covered: currentDueDate 
+        }]);
+    } catch(histErr) {
+        console.error("Warning: Could not log history", histErr);
+    }
+
+    // Update Policy
+    await supabase.from('az_submissions').update({ 
+        next_payment_date: newDueDate,
+        is_paid: false 
+    }).eq('sub_id', id);
+    
     res.json({ success: true, message: 'Paid', nextDate: newDueDate });
-  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+  } catch (e) { 
+      console.error("Payment Error:", e);
+      res.status(500).json({ success: false, message: e.message }); 
+  }
 });
 
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
